@@ -4,18 +4,25 @@ import hashlib
 import logging
 import os
 import random
+from dataclasses import dataclass
 from datetime import datetime
 from hashlib import sha1
 from os.path import expanduser
 from sys import platform as _platform
+from typing import Optional, Tuple
 
 from cryptography import x509
 from cryptography.exceptions import InvalidSignature, UnsupportedAlgorithm
 from cryptography.hazmat.backends import default_backend
-from cryptography.hazmat.primitives import padding, hashes, serialization
+from cryptography.hazmat.primitives import hashes, padding, serialization
 from cryptography.hazmat.primitives.asymmetric.padding import PKCS1v15
-from cryptography.hazmat.primitives.asymmetric.rsa import RSAPublicNumbers, RSAPrivateNumbers, rsa_crt_iqmp, \
-    rsa_crt_dmp1, rsa_crt_dmq1, RSAPublicKey, RSAPrivateKey
+from cryptography.hazmat.primitives.asymmetric.rsa import (RSAPrivateKey,
+                                                           RSAPrivateNumbers,
+                                                           RSAPublicKey,
+                                                           RSAPublicNumbers,
+                                                           rsa_crt_dmp1,
+                                                           rsa_crt_dmq1,
+                                                           rsa_crt_iqmp)
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 from cryptography.hazmat.primitives.serialization import pkcs12
@@ -23,8 +30,9 @@ from pyasn1.codec.der import decoder as der_decoder
 from pyasn1.codec.der import encoder as der_encoder
 from pyasn1.codec.der.encoder import encode
 from pyasn1.type import tag
-from pyasn1.type.namedtype import NamedTypes, NamedType
-from pyasn1.type.univ import Sequence, Integer, OctetString, ObjectIdentifier, Set, BitString, Null
+from pyasn1.type.namedtype import NamedType, NamedTypes
+from pyasn1.type.univ import (BitString, Integer, Null, ObjectIdentifier,
+                              OctetString, Sequence, Set)
 
 ID_SEED_CBC = (1, 2, 410, 200004, 1, 4)
 ID_SEED_CBC_WITH_SHA1 = (1, 2, 410, 200004, 1, 15)
@@ -35,6 +43,17 @@ ID_KISA_NPKI_RAND_NUM = (1, 2, 410, 200004, 10, 1, 1, 3)
 
 
 # class
+@dataclass
+class CertMeta:
+    """Meta information of certificate"""
+    cn: Optional[str]
+    issuer: Optional[str]
+    cert_class: Optional[str]
+    cert_type_oid: Optional[str]
+    not_before: datetime
+    not_after: datetime
+    serialnum: int
+            
 class PinkSign:
     """Main class for PinkSign"""
 
@@ -97,6 +116,10 @@ class PinkSign:
                 self.load_prikey()
         return
 
+    # ------------------------
+    # Loading functions
+    # ------------------------
+
     def load_pubkey(self, pubkey_path: str = None, pubkey_data: bytes = None) -> None:
         """Load public key file
         :param pubkey_path: (str) path for public key file
@@ -141,11 +164,8 @@ class PinkSign:
         if prikey_password is not None:
             self.prikey_password = prikey_password
 
-        if self.prikey_path is not None:
-            d = open(self.prikey_path, 'rb').read()
-        else:
-            d = self.prikey_data
-        der = der_decoder.decode(d)[0]
+        self.prikey_data = open(self.prikey_path, 'rb').read()
+        der = der_decoder.decode(self.prikey_data)[0]
 
         # check if correct K-PKI prikey file
         algorithm_type = der[0][0].asTuple()
@@ -196,7 +216,12 @@ class PinkSign:
         self._load_prikey_with_decrypted_data(decrypted_prikey_data=prikey_data)
         return
 
-    def cn(self) -> str:
+    # ------------------------
+    # Properties
+    # ------------------------
+
+    @property
+    def cn(self) -> Optional[str]:
         """Get cn value
 
         p = PinkSign(pubkey_path="/some/path/signCert.der")
@@ -207,9 +232,10 @@ class PinkSign:
         for dn in self.pub_cert.subject.rdns:
             if dn.rfc4514_string().startswith('CN='):
                 return dn.rfc4514_string()[3:]
-        return ''
+        return ""
 
-    def issuer(self) -> str:
+    @property
+    def issuer(self) -> Optional[str]:
         """Get issuer value
 
         p = PinkSign(pubkey_path="/some/path/signCert.der")
@@ -221,7 +247,8 @@ class PinkSign:
             if dn.rfc4514_string().startswith('O='):
                 return dn.rfc4514_string()[2:]
 
-    def cert_class(self) -> str:
+    @property
+    def cert_class(self) -> Optional[str]:
         """Get cert class
 
         p = PinkSign(pubkey_path="/some/path/signCert.der")
@@ -233,7 +260,8 @@ class PinkSign:
             if dn.rfc4514_string().startswith('CN='):
                 return dn.rfc4514_string()[3:]
 
-    def cert_type_oid(self) -> str:
+    @property
+    def cert_type_oid(self) -> Optional[str]:
         """Get cert type
         TODO: bad way to find value following oid. exception may occurred with certain certificate
 
@@ -246,7 +274,8 @@ class PinkSign:
             if ext.oid.dotted_string == '2.5.29.32':  #
                 return ext.value[0].policy_identifier.dotted_string
 
-    def valid_date(self) -> (datetime, datetime):
+    @property
+    def valid_date(self) -> Tuple[datetime, datetime]:
         """Get valid date range
 
         p = PinkSign(pubkey_path="/some/path/signCert.der")
@@ -256,6 +285,7 @@ class PinkSign:
             raise ValueError("Public key should be loaded before fetching valid date.")
         return self.pub_cert.not_valid_before, self.pub_cert.not_valid_after
 
+    @property
     def serialnum(self) -> int:
         """Get serial number value
 
@@ -266,6 +296,42 @@ class PinkSign:
         if self.pub_cert is None:
             raise ValueError("Public key should be loaded before fetching serial number.")
         return self.pub_cert.serial_number
+
+    @property
+    def pub_cert_pem_formatted(self) -> str:
+        """PEM format of public key certificate with header and footer"""
+        return self.pub_cert.public_bytes(serialization.Encoding.PEM).decode("ascii")
+
+    @property
+    def pub_cert_pem(self) -> str:
+        """Unformatted PEM format of public key certificate
+        (Most 3rd party API services require this format)"""
+        formatted_pem = self.pub_cert.public_bytes(serialization.Encoding.PEM).decode("ascii")
+        return formatted_pem.replace("-----BEGIN CERTIFICATE-----", "").replace("-----END CERTIFICATE-----", "").replace("\n", "")
+
+    @property
+    def pri_key_pem(self) -> str:
+        """PEM format of the raw private key data
+        (Most 3rd party API services require this format)"""
+        return base64.encodebytes(self.prikey_data).decode("ascii").replace("\n", "")
+
+    @property
+    def meta(self) -> CertMeta:
+        """Get meta data of the certificate"""
+        not_before, not_after = self.valid_date
+        return CertMeta(
+            cn=self.cn,
+            issuer=self.issuer,
+            cert_class=self.cert_class,
+            cert_type_oid=self.cert_type_oid,
+            not_before=not_before,
+            not_after=not_after,
+            serialnum=self.serialnum,
+        )
+
+    # ------------------------
+    # Methods
+    # ------------------------
 
     def sign(self, msg: bytes, algorithm=hashes.SHA256(), padding_=PKCS1v15()):
         """Signing with private key - pkcs1 encode and decrypt
@@ -368,7 +434,7 @@ class PinkSign:
 
         return der_encoder.encode(der)
 
-    def get_private_key_decryption_key_for_seed_cbc_with_sha1(self, der: Sequence) -> (bytes, bytes):
+    def get_private_key_decryption_key_for_seed_cbc_with_sha1(self, der: Sequence) -> Tuple[bytes, bytes]:
         """
         (PBKDF1) get key, iv for decrypt private key encrypted with PBES1
         :param der: encrypted private key der
@@ -382,7 +448,7 @@ class PinkSign:
         iv = div[:16]
         return k, iv
 
-    def get_private_key_decryption_key_for_seed_cbc(self, der: Sequence) -> (bytes, bytes):
+    def get_private_key_decryption_key_for_seed_cbc(self, der: Sequence) -> Tuple[bytes, bytes]:
         """
         (PBKDF1) get key, iv for decrypt private key encrypted with PBES1 (old style)
         :param der: encrypted private key der
@@ -395,7 +461,7 @@ class PinkSign:
         iv = b"0123456789012345"
         return k, iv
 
-    def get_private_key_decryption_key_for_pbes2(self, der: Sequence) -> (bytes, bytes):
+    def get_private_key_decryption_key_for_pbes2(self, der: Sequence) -> Tuple[bytes, bytes]:
         """
         (PBKDF2) get key, iv for decrypt private key encrypted with PBES2
         :param der: encrypted private key der
@@ -470,14 +536,14 @@ def choose_cert(base_path: str = None, cn: str = None, pw: str = None):
                     cert = PinkSign(pubkey_path="%s/signCert.der" % cert_path)
                     cert.prikey_path = "%s/signPri.key" % cert_path
                     if cn is not None:
-                        if cn in cert.cn():
+                        if cn in cert.cn:
                             if pw is not None:
                                 cert.load_prikey(prikey_path="%s/signPri.key" % cert_path, prikey_password=pw)
                             return cert
                     cert_list.append(cert)
     i = 1
     for cert in cert_list:
-        (cn, (valid_from, valid_until), issuer) = (cert.cn(), cert.valid_date(), cert.issuer())
+        (cn, (valid_from, valid_until), issuer) = (cert.cn, cert.valid_date, cert.issuer)
         print("[%d] %s (%s ~ %s) issued by %s" % (i, cn, valid_from, valid_until, issuer))
         i += 1
     i = int(input("Choose your certifiacte: "))
@@ -590,7 +656,7 @@ def pbkdf1(password: bytes, salt: bytes, c: int = 1200, dk_len: int = 20):
     return t[:dk_len]
 
 
-def separate_p12_into_npki(p12_data: bytes, prikey_password: bytes) -> (bytes, bytes):
+def separate_p12_into_npki(p12_data: bytes, prikey_password: bytes) -> Tuple[bytes, bytes]:
     """
     :param p12_data: (bytes) p12 file data
     :param prikey_password: (bytes) p12 file password
